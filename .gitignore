@@ -1,2 +1,4 @@
 airflow-venv
 logs
+dags/__pycache__/
+airflow-webserver.pid
