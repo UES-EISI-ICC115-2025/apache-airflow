@@ -1,8 +1,8 @@
 sudo apt update
 sudo apt install -y python3-pip python3-venv libpq-dev build-essential
 # sudo apt install -y default-mysql-client default-libmysqlclient-dev pkg-config
-python3 -m venv airflow-venv
-source airflow-venv/bin/activate
+python3 -m venv airflow_env
+source airflow_env/bin/activate
 
 sudo chown -R $(whoami):$(whoami) ~/apache-airflow/airflow-data
 sudo chmod -R 755 ~/apache-airflow/airflow-data
@@ -21,3 +21,4 @@ export CONSTRAINT_URL="https://raw.githubusercontent.com/apache/airflow/constrai
 # For example this would install 3.0.0 with python 3.10: https://raw.githubusercontent.com/apache/airflow/constraints-3.1.0/constraints-3.10.txt
 
 pip install "apache-airflow[postgres]==${AIRFLOW_VERSION}" --constraint "${CONSTRAINT_URL}"
+pip install apache-airflow-providers-postgres
