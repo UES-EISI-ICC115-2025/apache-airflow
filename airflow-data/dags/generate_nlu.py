@@ -6,9 +6,14 @@ import pendulum
 from airflow.decorators import dag, task
 from airflow.providers.postgres.hooks.postgres import PostgresHook
 from airflow.providers.common.sql.operators.sql import SQLExecuteQueryOperator
+from airflow.operators.bash import BashOperator
 from collections import defaultdict
 import re
+import unicodedata
 
+# Define the absolute path to your Rasa virtual environment's Python binary
+RASA_PYTHON_BIN = "/home/icc115/caso-servicio-cliente/rasa_env/bin/python"
+RASA_PROJECT_DIR = "/home/icc115/caso-servicio-cliente"
 
 @dag(
     start_date=pendulum.datetime(2025, 1, 1, tz="UTC"),
@@ -57,6 +62,12 @@ def generate_nlu():
         # Push the transformed data to XCom for the next task
         context["ti"].xcom_push(key="nlu_examples", value=nlu_examples)
 
+    def _remove_accents(s: str) -> str:
+        return (
+            unicodedata.normalize("NFKD", s)
+            .encode("ASCII", "ignore")
+            .decode("ASCII")
+        )
     @task
     def update_productos_disponibles_intents(**context):
         # Retrieve nlu examples from XCom
@@ -78,27 +89,29 @@ def generate_nlu():
                 examples.clear()
                 for producto in productos_disponibles:
                     for old_example in old_examples:
-                        # Agrega el nombre completo del producto en lugar del [placeholder]
-                        intent_text = re.sub(
-                                r"\[([^\]]+)\]", "[" + producto[0] + "]", old_example
-                            )
-                        if intent_text not in examples:
-                            examples.append(
-                                intent_text
-                            )
+
+                        # Agrega el nombre completo del producto en varias variantes:
+                        # - original
+                        # - lowercase
+                        # - lowercase sin tildes
+                        full_name = producto[0].strip()
+                        variants = {full_name, full_name.lower(), _remove_accents(full_name.lower())}
 
                         # Adicionalmente, agrega fragmentos del nombre del producto en caso sea un nombre largo
-                        # Ej: "Plan Premium Anual" -> "Plan", "Premium", "Anual"
-                        nombre_producto_fragmentos = producto[0].split()
+                        # Ej: "Plan Premium Anual" -> "Plan", "Premium", "Anual" (y sus variantes)
+                        nombre_producto_fragmentos = full_name.split()
                         if len(nombre_producto_fragmentos) > 1:
                             for fragment in nombre_producto_fragmentos:
-                                intent_fragment_text = re.sub(
-                                    r"\[([^\]]+)\]", "[" + fragment.strip() + "]", old_example
-                                )
-                                if intent_fragment_text not in examples:
-                                    examples.append(
-                                        intent_fragment_text
-                                    )
+                                frag = fragment.strip()
+                                variants.add(frag)
+                                variants.add(frag.lower())
+                                variants.add(_remove_accents(frag.lower()))
+
+                        # Reemplaza el placeholder en el ejemplo por cada variante y evita duplicados
+                        for variant in variants:
+                            intent_text = re.sub(r"\[([^\]]+)\]", "[" + variant + "]", old_example)
+                            if intent_text not in examples:
+                                examples.append(intent_text)
             updated_nlu_examples.append((intent, examples))
 
         # Push the transformed data to XCom for the next task
@@ -158,6 +171,16 @@ def generate_nlu():
         with open("/home/icc115/caso-servicio-cliente/data/nlu.yml", "w") as f:
             f.write(nlu_content)
 
+
+    train_model_task = BashOperator(
+        task_id="train_rasa_model",
+        bash_command=f"""
+        cd {RASA_PROJECT_DIR}
+        # Use the python binary from the venv to run the rasa command
+        {RASA_PYTHON_BIN} -m rasa train --out models/ --force
+        """
+    )
+
     # Define task dependencies
     # create_tables >> load_sample_data >> fetch_nlu() >> generar_nlu_yml
     (
@@ -165,6 +188,7 @@ def generate_nlu():
         >> update_productos_disponibles_intents()
         >> generar_nlu_yml()
         << fetch_regex_patterns()
+        >> train_model_task
     )
 
 
